@@ -23,9 +23,10 @@ function M.load_project(root)
   local watch_paths = {}
   for _, locale in ipairs(settings.locales) do
     messages[locale] = loader.load_messages(root, settings.pathPattern, locale)
-    local path = loader.get_message_path(root, settings.pathPattern, locale)
-    if vim.fn.filereadable(path) == 1 then
-      table.insert(watch_paths, { locale = locale, path = path })
+    for _, path in ipairs(loader.get_message_paths(root, settings.pathPattern, locale)) do
+      if vim.fn.filereadable(path) == 1 then
+        table.insert(watch_paths, { locale = locale, path = path })
+      end
     end
   end
 

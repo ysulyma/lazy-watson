@@ -25,10 +25,31 @@ function M.find_project_root(start_path, pattern)
   return nil
 end
 
+--- Normalize a pathPattern value (string or string[]) into a flat list of strings.
+---@param value string|string[] A single pattern or array of patterns
+---@return string[] List of pattern strings
+local function normalize_path_patterns(value)
+  if type(value) == "string" then
+    return { value }
+  end
+  if type(value) == "table" then
+    local result = {}
+    for _, v in ipairs(value) do
+      if type(v) == "string" then
+        table.insert(result, v)
+      end
+    end
+    if #result > 0 then
+      return result
+    end
+  end
+  return nil
+end
+
 --- Load inlang settings from project.inlang/settings.json
 ---@param root string Project root path
 ---@param pattern string Settings file pattern
----@return table|nil Settings table { baseLocale, locales, pathPattern } or nil on error
+---@return table|nil Settings table { baseLocale, locales, pathPattern: string[] } or nil on error
 function M.load_settings(root, pattern)
   local settings_path = root .. "/" .. pattern
   local content = M._read_file(settings_path)
@@ -48,22 +69,21 @@ function M.load_settings(root, pattern)
   local locales = settings.locales
 
   -- Find pathPattern from plugin settings
-  -- Typically in plugin["plugin.inlang.messageFormat"] or similar
-  local path_pattern = nil
+  -- Any top-level key starting with "plugin." may contain a pathPattern
+  -- pathPattern can be a string or an array of strings
+  local path_patterns = nil
 
-  if settings.plugin then
-    for _, plugin in ipairs(settings.plugin) do
-      if type(plugin) == "table" then
-        if plugin.pathPattern then
-          path_pattern = plugin.pathPattern
-          break
-        end
+  for key, value in pairs(settings) do
+    if type(key) == "string" and key:find("^plugin%.") and type(value) == "table" and value.pathPattern then
+      path_patterns = normalize_path_patterns(value.pathPattern)
+      if path_patterns then
+        break
       end
     end
   end
 
   -- Fallback: check for common patterns
-  if not path_pattern then
+  if not path_patterns then
     local common_patterns = {
       -- {locale} is preferred
       "./messages/{locale}.json",
@@ -81,7 +101,7 @@ function M.load_settings(root, pattern)
     for _, pat in ipairs(common_patterns) do
       local test_path = root .. "/" .. pat:gsub("{locale}", fallback_locale):gsub("{languageTag}", fallback_locale)
       if vim.fn.filereadable(test_path) == 1 then
-        path_pattern = pat
+        path_patterns = { pat }
         break
       end
     end
@@ -95,16 +115,16 @@ function M.load_settings(root, pattern)
   return {
     baseLocale = base_locale,
     locales = locales,
-    pathPattern = path_pattern or "./messages/{languageTag}.json",
+    pathPattern = path_patterns or { "./messages/{languageTag}.json" },
   }
 end
 
---- Get the full path to a message file
+--- Resolve a single path pattern to a full filesystem path
 ---@param root string Project root path
----@param pattern string Path pattern with {locale} or {languageTag} placeholder
+---@param pattern string A single path pattern with {locale} or {languageTag} placeholder
 ---@param locale string Locale code
 ---@return string Full path to message file
-function M.get_message_path(root, pattern, locale)
+local function resolve_pattern(root, pattern, locale)
   local relative_path = pattern:gsub("{locale}", locale):gsub("{languageTag}", locale)
   -- Handle ./ prefix
   if relative_path:sub(1, 2) == "./" then
@@ -113,27 +133,45 @@ function M.get_message_path(root, pattern, locale)
   return root .. "/" .. relative_path
 end
 
---- Load messages for a specific locale
+--- Get all resolved message file paths for the given patterns
 ---@param root string Project root path
----@param pattern string Path pattern with {locale} or {languageTag} placeholder
+---@param patterns string[] List of path patterns with {locale} or {languageTag} placeholder
 ---@param locale string Locale code
----@return table Message key-value map
-function M.load_messages(root, pattern, locale)
-  local message_path = M.get_message_path(root, pattern, locale)
-  local content = M._read_file(message_path)
+---@return string[] List of full paths to message files
+function M.get_message_paths(root, patterns, locale)
+  local paths = {}
+  for _, pattern in ipairs(patterns) do
+    table.insert(paths, resolve_pattern(root, pattern, locale))
+  end
+  return paths
+end
 
-  if not content then
-    return {}
+--- Load messages for a specific locale from all path patterns
+---@param root string Project root path
+---@param patterns string[] List of path patterns with {locale} or {languageTag} placeholder
+---@param locale string Locale code
+---@return table Message key-value map (merged from all matching files)
+function M.load_messages(root, patterns, locale)
+  local merged = {}
+
+  for _, pattern in ipairs(patterns) do
+    local message_path = resolve_pattern(root, pattern, locale)
+    local content = M._read_file(message_path)
+
+    if content then
+      local ok, messages = pcall(vim.json.decode, content)
+      if not ok then
+        vim.notify("Failed to parse messages for " .. locale .. ": " .. tostring(messages), vim.log.levels.ERROR)
+      else
+        local flat = M._flatten_messages(messages)
+        for k, v in pairs(flat) do
+          merged[k] = v
+        end
+      end
+    end
   end
 
-  local ok, messages = pcall(vim.json.decode, content)
-  if not ok then
-    vim.notify("Failed to parse messages for " .. locale .. ": " .. tostring(messages), vim.log.levels.ERROR)
-    return {}
-  end
-
-  -- Flatten messages to handle various formats
-  return M._flatten_messages(messages)
+  return merged
 end
 
 --- Flatten messages to a simple key-value map
