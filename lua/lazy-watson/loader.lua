@@ -65,14 +65,21 @@ function M.load_settings(root, pattern)
   -- Fallback: check for common patterns
   if not path_pattern then
     local common_patterns = {
+      -- {locale} is preferred
+      "./messages/{locale}.json",
+      "./src/messages/{locale}.json",
+      "./locales/{locale}.json",
+      "./i18n/{locale}.json",
+      -- {languageTag} is legacy but still supported
       "./messages/{languageTag}.json",
       "./src/messages/{languageTag}.json",
       "./locales/{languageTag}.json",
       "./i18n/{languageTag}.json",
     }
 
+    local fallback_locale = base_locale or "en"
     for _, pat in ipairs(common_patterns) do
-      local test_path = root .. "/" .. pat:gsub("{languageTag}", base_locale or "en")
+      local test_path = root .. "/" .. pat:gsub("{locale}", fallback_locale):gsub("{languageTag}", fallback_locale)
       if vim.fn.filereadable(test_path) == 1 then
         path_pattern = pat
         break
@@ -94,11 +101,11 @@ end
 
 --- Get the full path to a message file
 ---@param root string Project root path
----@param pattern string Path pattern with {languageTag} placeholder
+---@param pattern string Path pattern with {locale} or {languageTag} placeholder
 ---@param locale string Locale code
 ---@return string Full path to message file
 function M.get_message_path(root, pattern, locale)
-  local relative_path = pattern:gsub("{languageTag}", locale)
+  local relative_path = pattern:gsub("{locale}", locale):gsub("{languageTag}", locale)
   -- Handle ./ prefix
   if relative_path:sub(1, 2) == "./" then
     relative_path = relative_path:sub(3)
@@ -108,7 +115,7 @@ end
 
 --- Load messages for a specific locale
 ---@param root string Project root path
----@param pattern string Path pattern with {languageTag} placeholder
+---@param pattern string Path pattern with {locale} or {languageTag} placeholder
 ---@param locale string Locale code
 ---@return table Message key-value map
 function M.load_messages(root, pattern, locale)
